@@ -29,13 +29,12 @@ import com.google.mlkit.vision.barcode.BarcodeScanner;
 import com.google.mlkit.vision.barcode.BarcodeScanning;
 import com.google.mlkit.vision.common.InputImage;
 
-//import net.sf.scuba.smartcards.CardService;
-
-import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.android.service.MqttAndroidClient; // Thay MqttClient bằng MqttAndroidClient
+import org.eclipse.paho.client.mqttv3.IMqttActionListener;
+import org.eclipse.paho.client.mqttv3.IMqttToken;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
-import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.jmrtd.BACKey;
 import org.jmrtd.PassportService;
 import org.jmrtd.lds.CardAccessFile;
@@ -44,21 +43,15 @@ import org.jmrtd.lds.SecurityInfo;
 import org.jmrtd.lds.icao.DG1File;
 import net.sf.scuba.smartcards.CardService;
 import net.sf.scuba.smartcards.CardServiceException;
-import net.sf.scuba.smartcards.CommandAPDU;
-import net.sf.scuba.smartcards.IsoDepCardService;
-import net.sf.scuba.smartcards.ResponseAPDU;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.math.BigInteger;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -76,24 +69,24 @@ import retrofit2.converter.gson.GsonConverterFactory;
 import retrofit2.http.GET;
 import retrofit2.http.Path;
 
-
 public class MainActivity extends AppCompatActivity {
 
-    private static final String BROKER_URL = "tcp://192.168.5.211:1883";
-    private static final String CLIENT_ID = "AndroidQRandNFCClient";
-    private static final String TOPIC = "access_log";
-    private static final String BASE_URL = "https://192.168.5.211:7244/";
+    private static final String BROKER_URL = "tcp://127.0.0.1:1883";
+    private static final String CLIENT_ID = "AndroidQRandNFCClient_" + System.currentTimeMillis();
+    private static final String TOPIC = "access/log";
+    private static final String BASE_URL = "https://192.168.1.142:7244/";
 
     private NfcAdapter nfcAdapter;
     private TextView statusTextView;
     private PreviewView previewView;
-    private MqttClient mqttClient;
+    private MqttAndroidClient mqttClient;
     private ExecutorService cameraExecutor;
     private Tag nfcTag;
     private String qrCccdNumber;
     private String qrMrz;
     private Registration qrRegistration;
     private boolean isQrScanned;
+    private ImageAnalysis imageAnalysis;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -105,21 +98,21 @@ public class MainActivity extends AppCompatActivity {
         cameraExecutor = Executors.newSingleThreadExecutor();
         nfcAdapter = NfcAdapter.getDefaultAdapter(this);
         isQrScanned = false;
-
-        // Kiểm tra NFC
+//check nfc
         if (nfcAdapter == null || !nfcAdapter.isEnabled()) {
             Toast.makeText(this, "Vui lòng bật NFC", Toast.LENGTH_LONG).show();
         }
-
-        // Kiểm tra quyền camera
+//check camera
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, 100);
         } else {
             startCamera();
         }
+
+//connect mqtt broker
+        connectToMqttBroker();
     }
-private ImageAnalysis imageAnalysis; // Lưu ImageAnalysis
 
     @OptIn(markerClass = ExperimentalGetImage.class)
     private void startCamera() {
@@ -164,12 +157,6 @@ private ImageAnalysis imageAnalysis; // Lưu ImageAnalysis
         }, ContextCompat.getMainExecutor(this));
     }
 
-//    private void stopCameraAnalysis() {
-//        if (imageAnalysis != null) {
-//            imageAnalysis.clearAnalyzer();
-//            Log.d("Camera", "ImageAnalysis stopped");
-//        }
-//    }
     private void stopCameraAnalysis() {
         if (imageAnalysis != null) {
             imageAnalysis.clearAnalyzer();
@@ -187,46 +174,120 @@ private ImageAnalysis imageAnalysis; // Lưu ImageAnalysis
             }
         }, ContextCompat.getMainExecutor(this));
     }
-private void processQrData(String qrData) {
-    if (isQrScanned) {
-        runOnUiThread(() -> statusTextView.setText("Qr đã được quét, vui lòng bỏ qua"));
-        Log.d("QR", "QR đã được quét, bỏ qua");
-        return;
-    }
-    String[] parts = qrData.split("\\|");
-    for (int i = 0; i < parts.length; i++) {
-        Log.d("NFC", "Phần tử " + i + ": " + parts[i]);
-    }
-    if (parts.length >= 1 && isValidCccdId(parts[0])) {
-        qrCccdNumber = parts[0];
-        StringBuilder displayTextBuilder = new StringBuilder("Quét mã QR thành công\n");
-        displayTextBuilder.append("Số CCCD: ").append(qrCccdNumber);
-        if (parts.length >= 2) {
-            displayTextBuilder.append("\nSố CMND: ").append(parts[1]);
-        }
-        if (parts.length >= 3) {
-            displayTextBuilder.append("\nHọ và tên: ").append(parts[2]);
-        }
-        if (parts.length >= 4) {
-            displayTextBuilder.append("\nNgày sinh: ").append(parts[3]);
-        }
-        if (parts.length >= 5) {
-            displayTextBuilder.append("\nGiới tính: ").append(parts[4]);
-        }
 
-        String finalDisplayText = displayTextBuilder.toString();
-        runOnUiThread(() -> statusTextView.setText(finalDisplayText));
+    private void processQrData(String qrData) {
+        if (isQrScanned) {
+            runOnUiThread(() -> statusTextView.setText("QR đã được quét, vui lòng bỏ qua"));
+            Log.d("QR", "QR đã được quét, bỏ qua");
+            return;
+        }
+        String[] parts = qrData.split("\\|");
+        for (int i = 0; i < parts.length; i++) {
+            Log.d("NFC", "Phần tử " + i + ": " + parts[i]);
+        }
+        if (parts.length >= 1 && isValidCccdId(parts[0])) {
+            qrCccdNumber = parts[0];
+            StringBuilder displayTextBuilder = new StringBuilder("Quét mã QR thành công\n");
+            displayTextBuilder.append("Số CCCD: ").append(qrCccdNumber);
+            if (parts.length >= 2) {
+                displayTextBuilder.append("\nSố CMND: ").append(parts[1]);
+            }
+            if (parts.length >= 3) {
+                displayTextBuilder.append("\nHọ và tên: ").append(parts[2]);
+            }
+            if (parts.length >= 4) {
+                displayTextBuilder.append("\nNgày sinh: ").append(parts[3]);
+            }
+            if (parts.length >= 5) {
+                displayTextBuilder.append("\nGiới tính: ").append(parts[4]);
+            }
 
-        // Gọi verify và dừng camera
-        verifyCccd(qrCccdNumber);
-        stopCameraAnalysis();
-    } else {
-        runOnUiThread(() -> statusTextView.setText("Dữ liệu QR không hợp lệ"));
-        publishToMqtt("QR không hợp lệ lúc " + LocalDateTime.now(), "denied");
-        resetState();
+            String finalDisplayText = displayTextBuilder.toString();
+            runOnUiThread(() -> statusTextView.setText(finalDisplayText));
+
+            verifyCccd(qrCccdNumber);
+            stopCameraAnalysis();
+        } else {
+            runOnUiThread(() -> statusTextView.setText("Dữ liệu QR không hợp lệ"));
+            resetState();
+        }
     }
-}
 
+    private void connectToMqttBroker() {
+        mqttClient = new MqttAndroidClient(this, BROKER_URL, CLIENT_ID);
+        MqttConnectOptions options = new MqttConnectOptions();
+        options.setCleanSession(true);
+        options.setAutomaticReconnect(true);
+        options.setConnectionTimeout(10);
+        options.setKeepAliveInterval(60);
+
+        mqttClient.setCallback(new org.eclipse.paho.client.mqttv3.MqttCallback() {
+            @Override
+            public void connectionLost(Throwable cause) {
+                Log.e("MQTT", "Mất kết nối MQTT: " + (cause != null ? cause.getMessage() : "Không rõ nguyên nhân"));
+                runOnUiThread(() -> statusTextView.setText("Mất kết nối MQTT, đang thử lại..."));
+            }
+
+            @Override
+            public void messageArrived(String topic, MqttMessage message) {
+            }
+
+            @Override
+            public void deliveryComplete(IMqttToken token) {
+                Log.d("MQTT", "Gửi message thành công");
+            }
+        });
+
+        try {
+            mqttClient.connect(options, null, new IMqttActionListener() {
+                @Override
+                public void onSuccess(IMqttToken asyncActionToken) {
+                    Log.d("MQTT", "Kết nối MQTT thành công");
+                    runOnUiThread(() -> statusTextView.setText("Kết nối MQTT thành công"));
+                }
+
+                @Override
+                public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
+                    Log.e("MQTT", "Kết nối MQTT thất bại: " + exception.getMessage());
+                    runOnUiThread(() -> statusTextView.setText("Lỗi kết nối MQTT: " + exception.getMessage()));
+                }
+            });
+        } catch (Exception e) {
+            Log.e("MQTT", "Lỗi khởi tạo MQTT: " + e.getMessage());
+            runOnUiThread(() -> statusTextView.setText("Lỗi MQTT: " + e.getMessage()));
+        }
+    }
+
+    private void publishToMqtt(String cccdNumber, LocalDateTime accessTime, String result) {
+        try {
+            JSONObject messageJson = new JSONObject();
+            messageJson.put("cccdId", cccdNumber != null ? cccdNumber : "unknown");
+            messageJson.put("accessTime", formatDateTime(accessTime));
+            messageJson.put("status", result.equalsIgnoreCase("allowed") ? 1 : 0);
+
+            String message = messageJson.toString();
+            Log.d("MQTT", "Chuẩn bị gửi message JSON: " + message);
+
+            if (mqttClient != null && mqttClient.isConnected()) {
+                MqttMessage mqttMessage = new MqttMessage(message.getBytes());
+                mqttMessage.setQos(0);
+                mqttClient.publish(TOPIC, mqttMessage);
+                Log.d("MQTT", "Đã gửi message: " + message);
+            } else {
+                Log.w("MQTT", "MQTT client chưa kết nối, thử kết nối lại...");
+                connectToMqttBroker();
+                runOnUiThread(() -> statusTextView.setText("MQTT chưa kết nối, thử lại..."));
+            }
+        } catch (Exception e) {
+            Log.e("MQTT", "Lỗi gửi message: " + e.getMessage());
+            runOnUiThread(() -> statusTextView.setText("Lỗi gửi MQTT: " + e.getMessage()));
+        }
+    }
+
+    private String formatDateTime(LocalDateTime dateTime) {
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
+        return dateTime.format(formatter);
+    }
     private static OkHttpClient getUnsafeOkHttpClient() {
         try {
             final TrustManager[] trustAllCerts = new TrustManager[] {
@@ -293,7 +354,6 @@ private void processQrData(String qrData) {
                             registrationInfo.append("Thời gian kết thúc: ").append(qrRegistration.getEndTime() != null ? qrRegistration.getEndTime() : "N/A").append("\n");
                             registrationInfo.append("ID: ").append(qrRegistration.getId());
 
-                            // Hiển thị thông tin trong Toast
                             String toastMessage = registrationInfo.toString();
                             Toast.makeText(MainActivity.this, toastMessage, Toast.LENGTH_LONG).show();
 
@@ -314,11 +374,10 @@ private void processQrData(String qrData) {
                                 statusTextView.setText(errorMessage);
                                 Toast.makeText(MainActivity.this, "Người dùng chưa đăng ký", Toast.LENGTH_LONG).show();
                             });
-                            publishToMqtt("Người dùng " + cccdNumber + " bị từ chối lúc " + LocalDateTime.now(), "denied");
+                            publishToMqtt(cccdNumber, LocalDateTime.now(), "denied");
                             resetState();
                         }
                     } else {
-                        // Tạo chuỗi lỗi hoàn chỉnh và gán vào biến final
                         StringBuilder errorBuilder = new StringBuilder("Lỗi server: Bạn chưa đăng ký");
                         try {
                             if (response.errorBody() != null) {
@@ -335,7 +394,7 @@ private void processQrData(String qrData) {
                             statusTextView.setText(errorMessage);
                             Toast.makeText(MainActivity.this, "Người dùng chưa đăng ký (" + statusCode + ")", Toast.LENGTH_LONG).show();
                         });
-                        publishToMqtt("Người dùng " + cccdNumber + " bị từ chối lúc " + LocalDateTime.now(), "denied");
+                        publishToMqtt(cccdNumber, LocalDateTime.now(), "denied");
                         resetState();
                     }
                 } finally {
@@ -352,6 +411,7 @@ private void processQrData(String qrData) {
                         statusTextView.setText(errorMessage);
                         Toast.makeText(MainActivity.this, "Lỗi kết nối server, thử lại sau", Toast.LENGTH_LONG).show();
                     });
+                    publishToMqtt(cccdNumber, LocalDateTime.now(), "denied");
                     resetState();
                 } finally {
                     isProcessingApi = false;
@@ -360,437 +420,178 @@ private void processQrData(String qrData) {
         });
     }
 
-
-//    private void readNfcWithMrz(Tag tag, String mrz, Registration reg, String qrCccdNumber) {
-//        Log.d("NFC_DEBUG", mrz);
-//        ExecutorService nfcExecutor = Executors.newSingleThreadExecutor();
-//        nfcExecutor.execute(() -> {
-//            try {
-//                Log.d("NFC", "Bắt đầu đọc NFC cho CCCD: " + qrCccdNumber + ", MRZ: " + mrz);
-//                IsoDep isoDep = IsoDep.get(tag);
-//                if (isoDep == null) {
-//                    throw new IOException("Thẻ không hỗ trợ IsoDep");
-//                }
-//                Log.d("NFC", "Kết nối IsoDep...");
-//                isoDep.connect();
-//                isoDep.setTimeout(5000);
-//
-//
-//
-//                Log.d("NFC", "Khởi tạo CardService và PassportService...");
-//                CardService cardService = CardService.getInstance(isoDep);
-//
-//                PassportService passportService = new PassportService(
-//                        cardService, 128, 128, false, false);
-//                passportService.open();
-//
-//                // Kiểm tra MRZ
-//                Log.d("NFC", "Kiểm tra MRZ...");
-//                if (mrz == null || mrz.length() < 81) {
-//                    throw new IllegalArgumentException("MRZ không hợp lệ, độ dài: " + (mrz != null ? mrz.length() : "null"));
-//                }
-////                String docNumber = mrz.substring(5, 14);
-////                String dob = mrz.substring(67, 73);
-////                String expiry = mrz.substring(75, 81);
-//                String docNumber = mrz.substring(15, 29).replace("<", ""); // CCCD
-//                String dob = mrz.substring(30, 36);                         // 902092 = 22/09/2002 (format yyMMdd)
-//                String expiry = mrz.substring(38, 44);                      // 270922 = 22/09/2027 (format yyMMdd)
-//                Log.d("NFC", "Tạo BACKey: docNumber=" + docNumber + ", dob=" + dob + ", expiry=" + expiry);
-//
-//                BACKey bacKey = new BACKey(docNumber, dob, expiry);
-//                Log.d("NFC", "BAC key: " + bacKey );
-//                Log.d("NFC", "Thực hiện BAC...");
-//                passportService.doBAC(bacKey);
-//
-//                Log.d("NFC", "Đọc DG1...");
-//                java.io.InputStream inputStream = passportService.getInputStream(PassportService.EF_DG1);
-//                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-//                byte[] buffer = new byte[1024];
-//                int bytesRead;
-//                while ((bytesRead = inputStream.read(buffer)) != -1) {
-//                    baos.write(buffer, 0, bytesRead);
-//                }
-//                inputStream.close();
-//                byte[] data = baos.toByteArray();
-//
-//                Log.d("NFC", "Tạo DG1File...");
-//                ByteArrayInputStream bais = new ByteArrayInputStream(data);
-//                DG1File dg1File = new DG1File(bais);
-//                bais.close();
-//
-//                String cccdNumber = dg1File.getMRZInfo().getDocumentNumber();
-//                Log.d("NFC", "CCCD số từ thẻ: " + cccdNumber);
-//                LocalDateTime now = LocalDateTime.now();
-//
-//                // Kiểm tra điều kiện
-//                Log.d("NFC", "Kiểm tra điều kiện...");
-//                DateTimeFormatter formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-//                LocalDateTime startTime = LocalDateTime.parse(reg.getStartTime(), formatter);
-//                LocalDateTime endTime = LocalDateTime.parse(reg.getEndTime(), formatter);
-//
-//                if (cccdNumber.equals(qrCccdNumber) &&
-//                        cccdNumber.equals(reg.getCccdNumber()) &&
-//                        reg.getStatus() == 1 &&
-//                        now.isAfter(startTime) && now.isBefore(endTime)) {
-//                    Log.d("NFC", "Xác minh NFC thành công: " + reg.getPurpose());
-//                    runOnUiThread(() -> {
-//                        statusTextView.setText("Xác minh hợp lệ: " + reg.getPurpose());
-//                        Toast.makeText(MainActivity.this, "Cửa mở", Toast.LENGTH_LONG).show();
-//                    });
-//                    publishToMqtt("Người dùng " + cccdNumber + " vào lúc " + now, "allowed");
-//                    openDoor();
-//                } else {
-//                    String reason = "Thông tin không khớp";
-//                    if (reg.getStatus() != 1 && reg.getStatus() != null) {
-//                        reason = "Chưa được duyệt";
-//                    } else if (!now.isAfter(startTime) || !now.isBefore(endTime)) {
-//                        reason = "Ngoài thời gian cho phép";
-//                    }
-//                    final String finalReason = reason;
-//                    Log.e("NFC", "Xác minh NFC thất bại: " + reason);
-//                    runOnUiThread(() -> {
-//                        statusTextView.setText(finalReason);
-//                        Toast.makeText(MainActivity.this, finalReason, Toast.LENGTH_LONG).show();
-//                    });
-//                    publishToMqtt("Người dùng " + cccdNumber + " bị từ chối lúc " + now, "denied");
-//                }
-//
-//                Log.d("NFC", "Đóng PassportService và IsoDep...");
-//                passportService.close();
-//                isoDep.close();
-//            } catch (IllegalArgumentException e) {
-//                Log.e("NFC", "Lỗi MRZ không hợp lệ: " + e.getMessage(), e);
-//                runOnUiThread(() -> {
-//                    statusTextView.setText("MRZ không hợp lệ: " + e.getMessage());
-//                    Toast.makeText(MainActivity.this, "MRZ không hợp lệ: " + e.getMessage(), Toast.LENGTH_LONG).show();
-//                });
-//                publishToMqtt("Lỗi đọc thẻ (MRZ) cho " + qrCccdNumber + " lúc " + LocalDateTime.now(), "denied");
-//            } catch (IOException e) {
-//                Log.e("NFC", "Lỗi IO khi đọc thẻ: " + e.getMessage(), e);
-//                runOnUiThread(() -> {
-//                    statusTextView.setText("Lỗi IO: " + e.getMessage());
-//                    Toast.makeText(MainActivity.this, "Lỗi IO khi đọc thẻ NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
-//                });
-//                publishToMqtt("Lỗi đọc thẻ (IO) cho " + qrCccdNumber + " lúc " + LocalDateTime.now(), "denied");
-//            } catch (Exception e) {
-//                Log.e("NFC", "Lỗi không xác định khi đọc thẻ: " + e.getMessage(), e);
-//                runOnUiThread(() -> {
-//                    statusTextView.setText("Lỗi đọc thẻ: " + e.getMessage());
-//                    Toast.makeText(MainActivity.this, "Lỗi đọc thẻ NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
-//                });
-//                publishToMqtt("Lỗi đọc thẻ (khác) cho " + qrCccdNumber + " lúc " + LocalDateTime.now(), "denied");
-//            } finally {
-//                Log.d("NFC", "Hoàn tất xử lý NFC, reset trạng thái");
-//                resetState();
-//                nfcExecutor.shutdown();
-//            }
-//        });
-//    }
-//
     private boolean isValidCccdId(String cccdId) {
         return cccdId != null && cccdId.matches("^[0-9]{12}$");
     }
-//private void readNfcWithMrz(Tag tag, String mrz, Registration reg, String qrCccdNumber) {
-//    Log.d("NFC_DEBUG", "Full MRZ: " + mrz);
-//    ExecutorService nfcExecutor = Executors.newSingleThreadExecutor();
-//    nfcExecutor.execute(() -> {
-//        try {
-//            Log.d("NFC", "Bắt đầu đọc NFC cho CCCD: " + qrCccdNumber + ", MRZ: " + mrz);
-//            IsoDep isoDep = IsoDep.get(tag);
-//            if (isoDep == null) {
-//                throw new IOException("Thẻ không hỗ trợ IsoDep");
-//            }
-//            Log.d("NFC", "Kết nối IsoDep...");
-//            isoDep.connect();
-//            isoDep.setTimeout(5000);
-//
-//            Log.d("NFC", "Khởi tạo CardService và PassportService...");
-//            CardService cardService = CardService.getInstance(isoDep);
-//            PassportService passportService = new PassportService(cardService, 224, 224, false, false);
-//
-//            passportService.open();
-//
-//            // Kiểm tra MRZ
-//            Log.d("NFC", "Kiểm tra MRZ...");
-//            if (mrz == null || mrz.length() != 90) {
-//                throw new IllegalArgumentException("MRZ không hợp lệ, độ dài: " + (mrz != null ? mrz.length() : "null"));
-//            }
-//
-//            // Trích xuất thông tin từ MRZ
-//            String documentNumberRaw = mrz.substring(15, 29);
-//            String documentNumber = documentNumberRaw.replace("<", "");
-//
-//            String dob = mrz.substring(30, 36);
-//            String expiry = mrz.substring(38, 44);
-//
-//            Log.d("NFC", "Tạo BACKey: docNumber=" + documentNumber + ", dob=" + dob + ", expiry=" + expiry);
-//
-//            BACKey bacKey = new BACKey(documentNumber, dob, expiry);
-//
-//
-//            Log.d("NFC", "BAC key: " + bacKey);
-//            Log.d("NFC", "Thực hiện BAC...");
-//
-//            passportService.doBAC(bacKey);
-//
-//            Log.d("NFC", "Đọc DG1...");
-//            InputStream inputStream = passportService.getInputStream(PassportService.EF_DG1);
-//            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-//            byte[] buffer = new byte[1024];
-//            int bytesRead;
-//            while ((bytesRead = inputStream.read(buffer)) != -1) {
-//                baos.write(buffer, 0, bytesRead);
-//            }
-//            inputStream.close();
-//            byte[] data = baos.toByteArray();
-//
-//            Log.d("NFC", "Tạo DG1File...");
-//            ByteArrayInputStream bais = new ByteArrayInputStream(data);
-//            DG1File dg1File = new DG1File(bais);
-//            bais.close();
-//
-//            String cccdNumber = dg1File.getMRZInfo().getDocumentNumber();
-//            Log.d("NFC", "CCCD số từ thẻ: " + cccdNumber);
-//            LocalDateTime now = LocalDateTime.now();
-//
-//            // Kiểm tra điều kiện
-//            Log.d("NFC", "Kiểm tra điều kiện...");
-//            DateTimeFormatter formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-//            LocalDateTime startTime = LocalDateTime.parse(reg.getStartTime(), formatter);
-//            LocalDateTime endTime = LocalDateTime.parse(reg.getEndTime(), formatter);
-//
-//            if (cccdNumber.equals(qrCccdNumber) &&
-//                    cccdNumber.equals(reg.getCccdNumber()) &&
-//                    reg.getStatus() == 1 &&
-//                    now.isAfter(startTime) && now.isBefore(endTime)) {
-//                Log.d("NFC", "Xác minh NFC thành công: " + reg.getPurpose());
-//                runOnUiThread(() -> {
-//                    statusTextView.setText("Xác minh hợp lệ: " + reg.getPurpose());
-//                    Toast.makeText(MainActivity.this, "Cửa mở", Toast.LENGTH_LONG).show();
-//                });
-//                publishToMqtt("Người dùng " + cccdNumber + " vào lúc " + now, "allowed");
-//                openDoor();
-//            } else {
-//                String reason = "Thông tin không khớp";
-//                if (reg.getStatus() != 1 && reg.getStatus() != null) {
-//                    reason = "Chưa được duyệt";
-//                } else if (!now.isAfter(startTime) || !now.isBefore(endTime)) {
-//                    reason = "Ngoài thời gian cho phép";
-//                }
-//                final String finalReason = reason;
-//                Log.e("NFC", "Xác minh NFC thất bại: " + reason);
-//                runOnUiThread(() -> {
-//                    statusTextView.setText(finalReason);
-//                    Toast.makeText(MainActivity.this, finalReason, Toast.LENGTH_LONG).show();
-//                });
-//                publishToMqtt("Người dùng " + cccdNumber + " bị từ chối lúc " + now, "denied");
-//            }
-//
-//            Log.d("NFC", "Đóng PassportService và IsoDep...");
-//            passportService.close();
-//            isoDep.close();
-//        } catch (IllegalArgumentException e) {
-//            Log.e("NFC", "Lỗi MRZ không hợp lệ: " + e.getMessage(), e);
-//            runOnUiThread(() -> {
-//                statusTextView.setText("MRZ không hợp lệ: " + e.getMessage());
-//                Toast.makeText(MainActivity.this, "MRZ không hợp lệ: " + e.getMessage(), Toast.LENGTH_LONG).show();
-//            });
-//            publishToMqtt("Lỗi đọc thẻ (MRZ) cho " + qrCccdNumber + " lúc " + LocalDateTime.now(), "denied");
-//        } catch (IOException e) {
-//            Log.e("NFC", "Lỗi IO khi đọc thẻ: " + e.getMessage(), e);
-//            runOnUiThread(() -> {
-//                statusTextView.setText("Lỗi IO: " + e.getMessage());
-//                Toast.makeText(MainActivity.this, "Lỗi IO khi đọc thẻ NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
-//            });
-//            publishToMqtt("Lỗi đọc thẻ (IO) cho " + qrCccdNumber + " lúc " + LocalDateTime.now(), "denied");
-//        } catch (Exception e) {
-//            Log.e("NFC", "Lỗi không xác định khi đọc thẻ: " + e.getMessage(), e);
-//            runOnUiThread(() -> {
-//                statusTextView.setText("Lỗi đọc thẻ: " + e.getMessage());
-//                Toast.makeText(MainActivity.this, "Lỗi đọc thẻ NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
-//            });
-//            publishToMqtt("Lỗi đọc thẻ (khác) cho " + qrCccdNumber + " lúc " + LocalDateTime.now(), "denied");
-//        } finally {
-//            Log.d("NFC", "Hoàn tất xử lý NFC, reset trạng thái");
-//            resetState();
-//            nfcExecutor.shutdown();
-//        }
-//    });
-//}
-private void readNfcWithMrz(Tag tag, String mrz, Registration reg, String qrCccdNumber) {
-    Log.d("NFC_DEBUG", "Full MRZ: " + mrz);
-    ExecutorService nfcExecutor = Executors.newSingleThreadExecutor();
-    nfcExecutor.execute(() -> {
-        PassportService passportService = null;
-        IsoDep isoDep = null;
-        try {
-            Log.d("NFC", "Bắt đầu đọc NFC cho CCCD: " + qrCccdNumber + ", MRZ: " + mrz);
 
-            // Khởi tạo IsoDep
-            isoDep = IsoDep.get(tag);
-            if (isoDep == null) {
-                throw new IOException("Thẻ không hỗ trợ IsoDep");
-            }
-            Log.d("NFC", "Kết nối IsoDep...");
-            isoDep.connect();
-            isoDep.setTimeout(10000);
-
-            Log.d("NFC", "Khởi tạo CardService và PassportService...");
-            CardService cardService = CardService.getInstance(isoDep);
-            passportService = new PassportService(
-                    cardService,
-                    PassportService.EXTENDED_MAX_TRANCEIVE_LENGTH,
-                    PassportService.DEFAULT_MAX_BLOCKSIZE,
-                    false,
-                    false
-            );
-            passportService.open();
-
-            Log.d("NFC", "Kiểm tra MRZ...");
-            if (mrz == null || mrz.length() != 90) {
-                throw new IllegalArgumentException("MRZ không hợp lệ, độ dài: " + (mrz != null ? mrz.length() : "null"));
-            }
-
-//            String documentNumberRaw = mrz.substring(15, 29);
-//            String documentNumber = documentNumberRaw.replace("<", "");
-            String dob = mrz.substring(30, 36);
-            String expiry = mrz.substring(38, 44);
-            String documentNumber = "202002501";
-
-            Log.d("NFC", "Tạo BACKey: docNumber=" + documentNumber + ", dob=" + dob + ", expiry=" + expiry);
-
-            BACKey bacKey = new BACKey(documentNumber, dob, expiry);
-            Log.d("NFC", "BAC key: " + bacKey);
-
-            boolean paceSucceeded = false;
+    private void readNfcWithMrz(Tag tag, String mrz, Registration reg, String qrCccdNumber) {
+        ExecutorService nfcExecutor = Executors.newSingleThreadExecutor();
+        nfcExecutor.execute(() -> {
+            PassportService passportService = null;
+            IsoDep isoDep = null;
             try {
-                Log.d("NFC", "Thử PACE...");
-                CardAccessFile cardAccessFile = new CardAccessFile(passportService.getInputStream(PassportService.EF_CARD_ACCESS));
-                Collection<SecurityInfo> securityInfos = cardAccessFile.getSecurityInfos();
-                for (SecurityInfo securityInfo : securityInfos) {
-                    if (securityInfo instanceof PACEInfo) {
-                        Log.d("NFC", "Thẻ hỗ trợ PACE, thực hiện PACE...");
-                        passportService.doPACE(
-                                bacKey,
-                                securityInfo.getObjectIdentifier(),
-                                PACEInfo.toParameterSpec(((PACEInfo) securityInfo).getParameterId()),
-                                null
-                        );
-                        paceSucceeded = true;
-                        break;
+                Log.d("NFC", "Bắt đầu đọc NFC cho CCCD: " + qrCccdNumber + ", MRZ: " + mrz);
+                isoDep = IsoDep.get(tag);
+                if (isoDep == null) {
+                    throw new IOException("Thẻ không hỗ trợ IsoDep");
+                }
+                Log.d("NFC", "Kết nối IsoDep...");
+                isoDep.connect();
+                isoDep.setTimeout(10000);
+
+                Log.d("NFC", "Khởi tạo CardService và PassportService...");
+                CardService cardService = CardService.getInstance(isoDep);
+                passportService = new PassportService(
+                        cardService,
+                        PassportService.EXTENDED_MAX_TRANCEIVE_LENGTH,
+                        PassportService.DEFAULT_MAX_BLOCKSIZE,
+                        false,
+                        false
+                );
+                passportService.open();
+
+                Log.d("NFC", "Kiểm tra MRZ...");
+                if (mrz == null || mrz.length() != 90) {
+                    throw new IllegalArgumentException("MRZ không hợp lệ, độ dài: " + (mrz != null ? mrz.length() : "null"));
+                }
+
+                String documentNumberRaw = mrz.substring(18, 29);
+                String documentNumber = documentNumberRaw.replace("<", "");
+                String dob = mrz.substring(30, 36);
+                String expiry = mrz.substring(38, 44);
+
+                Log.d("NFC", "Tạo BACKey: docNumber=" + documentNumber + ", dob=" + dob + ", expiry=" + expiry);
+
+                BACKey bacKey = new BACKey(documentNumber, dob, expiry);
+                Log.d("NFC", "BAC key: " + bacKey);
+
+                boolean paceSucceeded = false;
+                try {
+                    Log.d("NFC", "Thử PACE...");
+                    CardAccessFile cardAccessFile = new CardAccessFile(passportService.getInputStream(PassportService.EF_CARD_ACCESS));
+                    Collection<SecurityInfo> securityInfos = cardAccessFile.getSecurityInfos();
+                    for (SecurityInfo securityInfo : securityInfos) {
+                        if (securityInfo instanceof PACEInfo) {
+                            Log.d("NFC", "Thẻ hỗ trợ PACE, thực hiện PACE...");
+                            passportService.doPACE(
+                                    bacKey,
+                                    securityInfo.getObjectIdentifier(),
+                                    PACEInfo.toParameterSpec(((PACEInfo) securityInfo).getParameterId()),
+                                    null
+                            );
+                            paceSucceeded = true;
+                            break;
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.w("NFC", "PACE thất bại: " + e.getMessage(), e);
+                }
+
+                Log.d("NFC", "Chọn applet, PACE thành công: " + paceSucceeded);
+                passportService.sendSelectApplet(paceSucceeded);
+
+                if (!paceSucceeded) {
+                    Log.d("NFC", "Thử BAC...");
+                    try {
+                        passportService.getInputStream(PassportService.EF_COM).read();
+                    } catch (Exception e) {
+                        Log.d("NFC", "EF_COM không đọc được, chọn lại applet và thử BAC...");
+                        passportService.sendSelectApplet(false);
+                        passportService.doBAC(bacKey);
                     }
                 }
+
+                Log.d("NFC", "Đọc DG1...");
+                InputStream inputStream = passportService.getInputStream(PassportService.EF_DG1);
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                byte[] buffer = new byte[1024];
+                int bytesRead;
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    baos.write(buffer, 0, bytesRead);
+                }
+                inputStream.close();
+                byte[] data = baos.toByteArray();
+
+                Log.d("NFC", "Tạo DG1File...");
+                ByteArrayInputStream bais = new ByteArrayInputStream(data);
+                DG1File dg1File = new DG1File(bais);
+                bais.close();
+
+                String cccdNumber = dg1File.getMRZInfo().getDocumentNumber();
+                Log.d("NFC", "CCCD số từ thẻ: " + cccdNumber);
+                LocalDateTime now = LocalDateTime.now();
+
+                Log.d("NFC", "Kiểm tra điều kiện...");
+                DateTimeFormatter formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
+                LocalDateTime startTime = LocalDateTime.parse(reg.getStartTime(), formatter);
+                LocalDateTime endTime = LocalDateTime.parse(reg.getEndTime(), formatter);
+
+                if (cccdNumber.equals(qrCccdNumber) &&
+                        cccdNumber.equals(reg.getCccdNumber()) &&
+                        reg.getStatus() == 1 &&
+                        now.isAfter(startTime) && now.isBefore(endTime)) {
+                    Log.d("NFC", "Xác minh NFC thành công: " + reg.getPurpose());
+                    runOnUiThread(() -> {
+                        statusTextView.setText("Xác minh hợp lệ: " + reg.getPurpose());
+                        Toast.makeText(MainActivity.this, "Cửa mở", Toast.LENGTH_LONG).show();
+                    });
+                    publishToMqtt(cccdNumber, now, "allowed");
+                    openDoor();
+                } else {
+                    String reason = "Thông tin không khớp";
+                    if (reg.getStatus() != 1 && reg.getStatus() != null) {
+                        reason = "Chưa được duyệt";
+                    } else if (!now.isAfter(startTime) || !now.isBefore(endTime)) {
+                        reason = "Ngoài thời gian cho phép";
+                    }
+                    final String finalReason = reason;
+                    Log.e("NFC", "Xác minh NFC thất bại: " + reason);
+                    runOnUiThread(() -> {
+                        statusTextView.setText(finalReason);
+                        Toast.makeText(MainActivity.this, finalReason, Toast.LENGTH_LONG).show();
+                    });
+                    publishToMqtt(cccdNumber, now, "denied");
+                }
+
+            } catch (IllegalArgumentException e) {
+                Log.e("NFC", "Lỗi MRZ không hợp lệ: " + e.getMessage(), e);
+                runOnUiThread(() -> {
+                    statusTextView.setText("MRZ không hợp lệ: " + e.getMessage());
+                    Toast.makeText(MainActivity.this, "MRZ không hợp lệ: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
+                // Không gửi MQTT cho lỗi NFC
+            } catch (IOException e) {
+                Log.e("NFC", "Lỗi IO khi đọc thẻ: " + e.getMessage(), e);
+                runOnUiThread(() -> {
+                    statusTextView.setText("Lỗi IO: " + e.getMessage());
+                    Toast.makeText(MainActivity.this, "Lỗi IO khi đọc thẻ NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
+                // Không gửi MQTT cho lỗi NFC
             } catch (Exception e) {
-                Log.w("NFC", "PACE thất bại: " + e.getMessage(), e);
-            }
-
-            Log.d("NFC", "Chọn applet, PACE thành công: " + paceSucceeded);
-            passportService.sendSelectApplet(paceSucceeded);
-
-            if (!paceSucceeded) {
-                Log.d("NFC", "Thử BAC...");
+                Log.e("NFC", "Lỗi không xác định khi đọc thẻ: " + e.getMessage(), e);
+                runOnUiThread(() -> {
+                    statusTextView.setText("Lỗi đọc thẻ: " + e.getMessage());
+                    Toast.makeText(MainActivity.this, "Lỗi đọc thẻ NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
+                // Không gửi MQTT cho lỗi NFC
+            } finally {
+                Log.d("NFC", "Đóng PassportService và IsoDep...");
                 try {
-                    passportService.getInputStream(PassportService.EF_COM).read();
+                    if (passportService != null) {
+                        passportService.close();
+                    }
+                    if (isoDep != null && isoDep.isConnected()) {
+                        isoDep.close();
+                    }
                 } catch (Exception e) {
-                    Log.d("NFC", "EF_COM không đọc được, chọn lại applet và thử BAC...");
-                    passportService.sendSelectApplet(false);
-                    passportService.doBAC(bacKey);
+                    Log.e("NFC", "Lỗi khi đóng kết nối: " + e.getMessage(), e);
                 }
+                Log.d("NFC", "Hoàn tất xử lý NFC, reset trạng thái");
+                resetState();
+                nfcExecutor.shutdown();
             }
-
-            // Đọc DG1
-            Log.d("NFC", "Đọc DG1...");
-            InputStream inputStream = passportService.getInputStream(PassportService.EF_DG1);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
-            int bytesRead;
-            while ((bytesRead = inputStream.read(buffer)) != -1) {
-                baos.write(buffer, 0, bytesRead);
-            }
-            inputStream.close();
-            byte[] data = baos.toByteArray();
-
-            Log.d("NFC", "Tạo DG1File...");
-            ByteArrayInputStream bais = new ByteArrayInputStream(data);
-            DG1File dg1File = new DG1File(bais);
-            bais.close();
-
-            String cccdNumber = dg1File.getMRZInfo().getDocumentNumber();
-            Log.d("NFC", "CCCD số từ thẻ: " + cccdNumber);
-            LocalDateTime now = LocalDateTime.now();
-
-            // Kiểm tra điều kiện
-            Log.d("NFC", "Kiểm tra điều kiện...");
-            DateTimeFormatter formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-            LocalDateTime startTime = LocalDateTime.parse(reg.getStartTime(), formatter);
-            LocalDateTime endTime = LocalDateTime.parse(reg.getEndTime(), formatter);
-
-            if (cccdNumber.equals(qrCccdNumber) &&
-                    cccdNumber.equals(reg.getCccdNumber()) &&
-                    reg.getStatus() == 1 &&
-                    now.isAfter(startTime) && now.isBefore(endTime)) {
-                Log.d("NFC", "Xác minh NFC thành công: " + reg.getPurpose());
-                runOnUiThread(() -> {
-                    statusTextView.setText("Xác minh hợp lệ: " + reg.getPurpose());
-                    Toast.makeText(MainActivity.this, "Cửa mở", Toast.LENGTH_LONG).show();
-                });
-                publishToMqtt("Người dùng " + cccdNumber + " vào lúc " + now, "allowed");
-                openDoor();
-            } else {
-                String reason = "Thông tin không khớp";
-                if (reg.getStatus() != 1 && reg.getStatus() != null) {
-                    reason = "Chưa được duyệt";
-                } else if (!now.isAfter(startTime) || !now.isBefore(endTime)) {
-                    reason = "Ngoài thời gian cho phép";
-                }
-                final String finalReason = reason;
-                Log.e("NFC", "Xác minh NFC thất bại: " + reason);
-                runOnUiThread(() -> {
-                    statusTextView.setText(finalReason);
-                    Toast.makeText(MainActivity.this, finalReason, Toast.LENGTH_LONG).show();
-                });
-                publishToMqtt("Người dùng " + cccdNumber + " bị từ chối lúc " + now, "denied");
-            }
-
-        } catch (IllegalArgumentException e) {
-            Log.e("NFC", "Lỗi MRZ không hợp lệ: " + e.getMessage(), e);
-            runOnUiThread(() -> {
-                statusTextView.setText("MRZ không hợp lệ: " + e.getMessage());
-                Toast.makeText(MainActivity.this, "MRZ không hợp lệ: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            });
-            publishToMqtt("Lỗi đọc thẻ (MRZ) cho " + qrCccdNumber + " lúc " + LocalDateTime.now(), "denied");
-        } catch (IOException e) {
-            Log.e("NFC", "Lỗi IO khi đọc thẻ: " + e.getMessage(), e);
-            runOnUiThread(() -> {
-                statusTextView.setText("Lỗi IO: " + e.getMessage());
-                Toast.makeText(MainActivity.this, "Lỗi IO khi đọc thẻ NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            });
-            publishToMqtt("Lỗi đọc thẻ (IO) cho " + qrCccdNumber + " lúc " + LocalDateTime.now(), "denied");
-        } catch (Exception e) {
-            Log.e("NFC", "Lỗi không xác định khi đọc thẻ: " + e.getMessage(), e);
-            runOnUiThread(() -> {
-                statusTextView.setText("Lỗi đọc thẻ: " + e.getMessage());
-                Toast.makeText(MainActivity.this, "Lỗi đọc thẻ NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
-            });
-            publishToMqtt("Lỗi đọc thẻ (khác) cho " + qrCccdNumber + " lúc " + LocalDateTime.now(), "denied");
-        } finally {
-            Log.d("NFC", "Đóng PassportService và IsoDep...");
-            try {
-                if (passportService != null) {
-                    passportService.close();
-                }
-                if (isoDep != null && isoDep.isConnected()) {
-                    isoDep.close();
-                }
-            } catch (Exception e) {
-                Log.e("NFC", "Lỗi khi đóng kết nối: " + e.getMessage(), e);
-            }
-            Log.d("NFC", "Hoàn tất xử lý NFC, reset trạng thái");
-            resetState();
-            nfcExecutor.shutdown();
-        }
-    });
-}
+        });
+    }
 
     private String formatDate(String date) {
         if (date == null || date.length() != 6) {
@@ -799,46 +600,47 @@ private void readNfcWithMrz(Tag tag, String mrz, Registration reg, String qrCccd
         return date.substring(4, 6) + date.substring(2, 4) + date.substring(0, 2);
     }
 
-private void handleNfcIntent(Intent intent) {
-    Log.d("NFC_DEBUG", "Đang xử lý nfc intent: " + intent.getAction());
-    String action = intent.getAction();
-    if (NfcAdapter.ACTION_TECH_DISCOVERED.equals(action) ||
-            NfcAdapter.ACTION_TAG_DISCOVERED.equals(action) ||
-            NfcAdapter.ACTION_NDEF_DISCOVERED.equals(action)) {
-        nfcTag = intent.getParcelableExtra(NfcAdapter.EXTRA_TAG);
-        Log.d("NFC_DEBUG", "NFC tag: " + (nfcTag != null ? nfcTag.toString() : "null"));
-        if (nfcTag != null) {
-            Log.d("NFC_DEBUG", "Tag technologies: " + Arrays.toString(nfcTag.getTechList()));
-            if (isQrScanned && qrMrz != null && qrRegistration != null) {
-                Log.d("NFC_DEBUG", "Điều kiện NFC hợp lệ, bắt đầu đọc thẻ");
-                runOnUiThread(() -> {
-                    statusTextView.setText("Đang đọc thẻ NFC...");
-                    Toast.makeText(this, "Đang đọc thẻ NFC...", Toast.LENGTH_SHORT).show();
-                });
-                readNfcWithMrz(nfcTag, qrMrz, qrRegistration, qrCccdNumber);
+    private void handleNfcIntent(Intent intent) {
+        // Giữ nguyên logic xử lý NFC intent
+        Log.d("NFC_DEBUG", "Đang xử lý nfc intent: " + intent.getAction());
+        String action = intent.getAction();
+        if (NfcAdapter.ACTION_TECH_DISCOVERED.equals(action) ||
+                NfcAdapter.ACTION_TAG_DISCOVERED.equals(action) ||
+                NfcAdapter.ACTION_NDEF_DISCOVERED.equals(action)) {
+            nfcTag = intent.getParcelableExtra(NfcAdapter.EXTRA_TAG);
+            Log.d("NFC_DEBUG", "NFC tag: " + (nfcTag != null ? nfcTag.toString() : "null"));
+            if (nfcTag != null) {
+                Log.d("NFC_DEBUG", "Tag technologies: " + Arrays.toString(nfcTag.getTechList()));
+                if (isQrScanned && qrMrz != null && qrRegistration != null) {
+                    Log.d("NFC_DEBUG", "Điều kiện NFC hợp lệ, bắt đầu đọc thẻ");
+                    runOnUiThread(() -> {
+                        statusTextView.setText("Đang đọc thẻ NFC...");
+                        Toast.makeText(this, "Đang đọc thẻ NFC...", Toast.LENGTH_SHORT).show();
+                    });
+                    readNfcWithMrz(nfcTag, qrMrz, qrRegistration, qrCccdNumber);
+                } else {
+                    Log.e("NFC_DEBUG", "Điều kiện NFC không hợp lệ: isQrScanned=" + isQrScanned +
+                            ", qrMrz=" + qrMrz + ", qrRegistration=" + qrRegistration);
+                    runOnUiThread(() -> {
+                        statusTextView.setText("Vui lòng quét mã QR trước");
+                        Toast.makeText(this, "Quét mã QR trước khi áp thẻ NFC", Toast.LENGTH_LONG).show();
+                    });
+                }
             } else {
-                Log.e("NFC_DEBUG", "Điều kiện NFC không hợp lệ: isQrScanned=" + isQrScanned +
-                        ", qrMrz=" + qrMrz + ", qrRegistration=" + qrRegistration);
+                Log.e("NFC_DEBUG", "NFC tag is null");
                 runOnUiThread(() -> {
-                    statusTextView.setText("Vui lòng quét mã QR trước");
-                    Toast.makeText(this, "Quét mã QR trước khi áp thẻ NFC", Toast.LENGTH_LONG).show();
+                    statusTextView.setText("Không nhận diện được thẻ NFC");
+                    Toast.makeText(this, "Không nhận diện được thẻ NFC", Toast.LENGTH_LONG).show();
                 });
             }
         } else {
-            Log.e("NFC_DEBUG", "NFC tag is null");
+            Log.e("NFC_DEBUG", "Invalid NFC action: " + action);
             runOnUiThread(() -> {
-                statusTextView.setText("Không nhận diện được thẻ NFC");
-                Toast.makeText(this, "Không nhận diện được thẻ NFC", Toast.LENGTH_LONG).show();
+                statusTextView.setText("Intent NFC không hợp lệ: " + action);
+                Toast.makeText(this, "Intent NFC không hợp lệ: " + action, Toast.LENGTH_LONG).show();
             });
         }
-    } else {
-        Log.e("NFC_DEBUG", "Invalid NFC action: " + action);
-        runOnUiThread(() -> {
-            statusTextView.setText("Intent NFC không hợp lệ: " + action);
-            Toast.makeText(this, "Intent NFC không hợp lệ: " + action, Toast.LENGTH_LONG).show();
-        });
     }
-}
 
     private void resetState() {
         qrCccdNumber = null;
@@ -850,10 +652,14 @@ private void handleNfcIntent(Intent intent) {
         runOnUiThread(() -> statusTextView.setText("Vui lòng quét mã QR"));
     }
 
+    private void openDoor() {
+        runOnUiThread(() -> Toast.makeText(this, "Cửa mở", Toast.LENGTH_SHORT).show());
+    }
+
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        Log.d("NFC_DEBUG", "onnewintend được gọi với action: " + intent.getAction() +
+        Log.d("NFC_DEBUG", "onNewIntent được gọi với action: " + intent.getAction() +
                 ", isQrScanned: " + isQrScanned + ", qrMrz: " + qrMrz + ", qrRegistration: " + qrRegistration);
         setIntent(intent);
         if (isQrScanned) {
@@ -864,33 +670,6 @@ private void handleNfcIntent(Intent intent) {
             Toast.makeText(this, "Vui lòng quét mã QR trước khi áp thẻ", Toast.LENGTH_LONG).show();
         }
     }
-
-    private void openDoor() {
-        // Giả lập mở cửa
-        runOnUiThread(() -> Toast.makeText(this, "Cửa mở", Toast.LENGTH_SHORT).show());
-    }
-
-    private void connectToMqttBroker() {
-        try {
-            mqttClient = new MqttClient(BROKER_URL, CLIENT_ID, new MemoryPersistence());
-            MqttConnectOptions options = new MqttConnectOptions();
-            options.setCleanSession(true);
-            mqttClient.connect(options);
-        } catch (MqttException e) {
-            runOnUiThread(() -> statusTextView.setText("Lỗi MQTT: " + e.getMessage()));
-        }
-    }
-
-    private void publishToMqtt(String message, String result) {
-        try {
-            if (mqttClient != null && mqttClient.isConnected()) {
-                mqttClient.publish(TOPIC, new MqttMessage((message + " - " + result).getBytes()));
-            }
-        } catch (MqttException e) {
-            runOnUiThread(() -> statusTextView.setText("Lỗi gửi MQTT: " + e.getMessage()));
-        }
-    }
-
 
     @Override
     protected void onResume() {
@@ -945,7 +724,7 @@ private void handleNfcIntent(Intent intent) {
             try {
                 mqttClient.disconnect();
             } catch (MqttException e) {
-                e.printStackTrace();
+                Log.e("MQTT", "Lỗi ngắt kết nối MQTT: " + e.getMessage());
             }
         }
         cameraExecutor.shutdown();

@@ -46,7 +46,6 @@ class Registration {
     public void setCccdNumber(String cccdNumber) { this.cccdNumber = cccdNumber; }
 }
 
-// Định nghĩa lớp wrapper cho response
 class RegistrationResponse {
     private int errCode;
     private String errDesc;
