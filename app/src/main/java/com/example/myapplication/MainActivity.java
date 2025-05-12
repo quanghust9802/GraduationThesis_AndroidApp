@@ -559,21 +559,18 @@ public class MainActivity extends AppCompatActivity {
                     statusTextView.setText("MRZ không hợp lệ: " + e.getMessage());
                     Toast.makeText(MainActivity.this, "MRZ không hợp lệ: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
-                // Không gửi MQTT cho lỗi NFC
             } catch (IOException e) {
                 Log.e("NFC", "Lỗi IO khi đọc thẻ: " + e.getMessage(), e);
                 runOnUiThread(() -> {
                     statusTextView.setText("Lỗi IO: " + e.getMessage());
                     Toast.makeText(MainActivity.this, "Lỗi IO khi đọc thẻ NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
-                // Không gửi MQTT cho lỗi NFC
             } catch (Exception e) {
                 Log.e("NFC", "Lỗi không xác định khi đọc thẻ: " + e.getMessage(), e);
                 runOnUiThread(() -> {
                     statusTextView.setText("Lỗi đọc thẻ: " + e.getMessage());
                     Toast.makeText(MainActivity.this, "Lỗi đọc thẻ NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
                 });
-                // Không gửi MQTT cho lỗi NFC
             } finally {
                 Log.d("NFC", "Đóng PassportService và IsoDep...");
                 try {
