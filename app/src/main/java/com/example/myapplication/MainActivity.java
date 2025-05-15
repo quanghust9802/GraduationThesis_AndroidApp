@@ -1,6 +1,7 @@
 package com.example.myapplication;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.PendingIntent;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -10,6 +11,7 @@ import android.nfc.Tag;
 import android.nfc.tech.IsoDep;
 import android.os.Bundle;
 import android.util.Log;
+import android.util.Size;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -29,20 +31,15 @@ import com.google.mlkit.vision.barcode.BarcodeScanner;
 import com.google.mlkit.vision.barcode.BarcodeScanning;
 import com.google.mlkit.vision.common.InputImage;
 
-import org.eclipse.paho.android.service.MqttAndroidClient; // Thay MqttClient bằng MqttAndroidClient
-import org.eclipse.paho.client.mqttv3.IMqttActionListener;
-import org.eclipse.paho.client.mqttv3.IMqttToken;
-import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
-import org.eclipse.paho.client.mqttv3.MqttException;
-import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.jmrtd.BACKey;
 import org.jmrtd.PassportService;
 import org.jmrtd.lds.CardAccessFile;
 import org.jmrtd.lds.PACEInfo;
 import org.jmrtd.lds.SecurityInfo;
 import org.jmrtd.lds.icao.DG1File;
+import org.json.JSONObject;
+
 import net.sf.scuba.smartcards.CardService;
-import net.sf.scuba.smartcards.CardServiceException;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -66,20 +63,18 @@ import retrofit2.Callback;
 import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
-import retrofit2.http.GET;
-import retrofit2.http.Path;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String BROKER_URL = "tcp://127.0.0.1:1883";
+    private static final String BROKER_URL = "tcp://192.168.0.117:1883";
     private static final String CLIENT_ID = "AndroidQRandNFCClient_" + System.currentTimeMillis();
     private static final String TOPIC = "access/log";
-    private static final String BASE_URL = "https://192.168.1.142:7244/";
+    private static final String BASE_URL = "https://192.168.0.117:7244/";
 
     private NfcAdapter nfcAdapter;
     private TextView statusTextView;
     private PreviewView previewView;
-    private MqttAndroidClient mqttClient;
+    private MqttHandler mqttHandler; // Thay MqttAndroidClient bằng MqttHandler
     private ExecutorService cameraExecutor;
     private Tag nfcTag;
     private String qrCccdNumber;
@@ -98,11 +93,13 @@ public class MainActivity extends AppCompatActivity {
         cameraExecutor = Executors.newSingleThreadExecutor();
         nfcAdapter = NfcAdapter.getDefaultAdapter(this);
         isQrScanned = false;
-//check nfc
+
+        // Check NFC
         if (nfcAdapter == null || !nfcAdapter.isEnabled()) {
             Toast.makeText(this, "Vui lòng bật NFC", Toast.LENGTH_LONG).show();
         }
-//check camera
+
+        // Check camera permission
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, 100);
@@ -110,7 +107,8 @@ public class MainActivity extends AppCompatActivity {
             startCamera();
         }
 
-//connect mqtt broker
+        // Khởi tạo MqttHandler và kết nối
+        mqttHandler = new MqttHandler();
         connectToMqttBroker();
     }
 
@@ -123,9 +121,9 @@ public class MainActivity extends AppCompatActivity {
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
                 imageAnalysis = new ImageAnalysis.Builder()
+                        .setTargetResolution(new Size(1280, 720))
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build();
-
                 imageAnalysis.setAnalyzer(cameraExecutor, imageProxy -> {
                     if (imageProxy.getImage() != null) {
                         InputImage image = InputImage.fromMediaImage(imageProxy.getImage(), imageProxy.getImageInfo().getRotationDegrees());
@@ -214,47 +212,21 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void connectToMqttBroker() {
-        mqttClient = new MqttAndroidClient(this, BROKER_URL, CLIENT_ID);
-        MqttConnectOptions options = new MqttConnectOptions();
-        options.setCleanSession(true);
-        options.setAutomaticReconnect(true);
-        options.setConnectionTimeout(10);
-        options.setKeepAliveInterval(60);
-
-        mqttClient.setCallback(new org.eclipse.paho.client.mqttv3.MqttCallback() {
-            @Override
-            public void connectionLost(Throwable cause) {
-                Log.e("MQTT", "Mất kết nối MQTT: " + (cause != null ? cause.getMessage() : "Không rõ nguyên nhân"));
-                runOnUiThread(() -> statusTextView.setText("Mất kết nối MQTT, đang thử lại..."));
-            }
-
-            @Override
-            public void messageArrived(String topic, MqttMessage message) {
-            }
-
-            @Override
-            public void deliveryComplete(IMqttToken token) {
-                Log.d("MQTT", "Gửi message thành công");
-            }
-        });
-
         try {
-            mqttClient.connect(options, null, new IMqttActionListener() {
-                @Override
-                public void onSuccess(IMqttToken asyncActionToken) {
-                    Log.d("MQTT", "Kết nối MQTT thành công");
-                    runOnUiThread(() -> statusTextView.setText("Kết nối MQTT thành công"));
-                }
-
-                @Override
-                public void onFailure(IMqttToken asyncActionToken, Throwable exception) {
-                    Log.e("MQTT", "Kết nối MQTT thất bại: " + exception.getMessage());
-                    runOnUiThread(() -> statusTextView.setText("Lỗi kết nối MQTT: " + exception.getMessage()));
-                }
+            // Gọi hàm connect của MqttHandler
+            mqttHandler.connect(BROKER_URL, CLIENT_ID);
+            Log.d("MQTT", "Kết nối MQTT thành công với ID: " + CLIENT_ID + ", Broker: " + BROKER_URL);
+            runOnUiThread(() -> {
+                statusTextView.setText("Kết nối MQTT thành công\nVui lòng quét mã QR");
+                Toast.makeText(MainActivity.this, "Kết nối MQTT thành công", Toast.LENGTH_SHORT).show();
             });
         } catch (Exception e) {
-            Log.e("MQTT", "Lỗi khởi tạo MQTT: " + e.getMessage());
-            runOnUiThread(() -> statusTextView.setText("Lỗi MQTT: " + e.getMessage()));
+            String errorMsg = e.getMessage() != null ? e.getMessage() : "Lỗi không xác định";
+            Log.e("MQTT", "Lỗi khi kết nối MQTT: " + errorMsg, e);
+            runOnUiThread(() -> {
+                statusTextView.setText("Lỗi kết nối MQTT: " + errorMsg);
+                Toast.makeText(MainActivity.this, "Lỗi kết nối MQTT: " + errorMsg, Toast.LENGTH_LONG).show();
+            });
         }
     }
 
@@ -268,19 +240,21 @@ public class MainActivity extends AppCompatActivity {
             String message = messageJson.toString();
             Log.d("MQTT", "Chuẩn bị gửi message JSON: " + message);
 
-            if (mqttClient != null && mqttClient.isConnected()) {
-                MqttMessage mqttMessage = new MqttMessage(message.getBytes());
-                mqttMessage.setQos(0);
-                mqttClient.publish(TOPIC, mqttMessage);
-                Log.d("MQTT", "Đã gửi message: " + message);
-            } else {
-                Log.w("MQTT", "MQTT client chưa kết nối, thử kết nối lại...");
-                connectToMqttBroker();
-                runOnUiThread(() -> statusTextView.setText("MQTT chưa kết nối, thử lại..."));
-            }
+            // Gọi hàm publish của MqttHandler
+            mqttHandler.publish(TOPIC, message);
+            Log.d("MQTT", "Đã gửi message: " + message);
+            runOnUiThread(() -> {
+                statusTextView.setText("Gửi MQTT thành công");
+                Toast.makeText(MainActivity.this, "Gửi MQTT thành công", Toast.LENGTH_SHORT).show();
+            });
         } catch (Exception e) {
-            Log.e("MQTT", "Lỗi gửi message: " + e.getMessage());
-            runOnUiThread(() -> statusTextView.setText("Lỗi gửi MQTT: " + e.getMessage()));
+            String errorMsg = e.getMessage() != null ? e.getMessage() : "Lỗi không xác định";
+            Log.e("MQTT", "Lỗi gửi message: " + errorMsg, e);
+            runOnUiThread(() -> {
+                statusTextView.setText("Lỗi gửi MQTT: " + errorMsg);
+                Toast.makeText(MainActivity.this, "Lỗi gửi MQTT: " + errorMsg, Toast.LENGTH_LONG).show();
+            });
+            connectToMqttBroker();
         }
     }
 
@@ -288,6 +262,7 @@ public class MainActivity extends AppCompatActivity {
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
         return dateTime.format(formatter);
     }
+
     private static OkHttpClient getUnsafeOkHttpClient() {
         try {
             final TrustManager[] trustAllCerts = new TrustManager[] {
@@ -518,7 +493,9 @@ public class MainActivity extends AppCompatActivity {
                 bais.close();
 
                 String cccdNumber = dg1File.getMRZInfo().getDocumentNumber();
+                String test = dg1File.getMRZInfo().getDocumentCode();
                 Log.d("NFC", "CCCD số từ thẻ: " + cccdNumber);
+                Log.d("NFC", "test: " + test);
                 LocalDateTime now = LocalDateTime.now();
 
                 Log.d("NFC", "Kiểm tra điều kiện...");
@@ -526,33 +503,53 @@ public class MainActivity extends AppCompatActivity {
                 LocalDateTime startTime = LocalDateTime.parse(reg.getStartTime(), formatter);
                 LocalDateTime endTime = LocalDateTime.parse(reg.getEndTime(), formatter);
 
-                if (cccdNumber.equals(qrCccdNumber) &&
-                        cccdNumber.equals(reg.getCccdNumber()) &&
-                        reg.getStatus() == 1 &&
-                        now.isAfter(startTime) && now.isBefore(endTime)) {
-                    Log.d("NFC", "Xác minh NFC thành công: " + reg.getPurpose());
-                    runOnUiThread(() -> {
-                        statusTextView.setText("Xác minh hợp lệ: " + reg.getPurpose());
-                        Toast.makeText(MainActivity.this, "Cửa mở", Toast.LENGTH_LONG).show();
-                    });
-                    publishToMqtt(cccdNumber, now, "allowed");
-                    openDoor();
-                } else {
-                    String reason = "Thông tin không khớp";
-                    if (reg.getStatus() != 1 && reg.getStatus() != null) {
-                        reason = "Chưa được duyệt";
-                    } else if (!now.isAfter(startTime) || !now.isBefore(endTime)) {
-                        reason = "Ngoài thời gian cho phép";
+                if (cccdNumber != null && qrCccdNumber != null && reg.getCccdNumber() != null) {
+                    String qrCccdNumberLast9 = qrCccdNumber.length() >= 9 ? qrCccdNumber.substring(qrCccdNumber.length() - 9) : qrCccdNumber;
+                    String regCccdNumberLast9 = reg.getCccdNumber().length() >= 9 ? reg.getCccdNumber().substring(reg.getCccdNumber().length() - 9) : reg.getCccdNumber();
+
+                    Log.d("NFC", "So sánh CCCD - Từ thẻ: " + cccdNumber + ", Từ QR (9 số cuối): " + qrCccdNumberLast9 + ", Từ đăng ký (9 số cuối): " + regCccdNumberLast9);
+
+                    if (cccdNumber.equals(qrCccdNumberLast9) &&
+                            cccdNumber.equals(regCccdNumberLast9) &&
+                            reg.getStatus() == 1 &&
+                            now.isAfter(startTime) && now.isBefore(endTime)) {
+                        Log.d("NFC", "Xác minh NFC thành công: " + reg.getPurpose());
+                        runOnUiThread(() -> {
+                            statusTextView.setText("Xác minh hợp lệ: " + reg.getPurpose());
+                            Toast.makeText(MainActivity.this, "Cửa mở thành công", Toast.LENGTH_LONG).show();
+                        });
+                        publishToMqtt(qrCccdNumber, now, "allowed");
+                        openDoor();
+                    } else {
+                        String reason = "Thông tin không khớp";
+                        if (reg.getStatus() != 1 && reg.getStatus() != null) {
+                            reason = "Chưa được duyệt";
+                        } else if (!now.isAfter(startTime) || !now.isBefore(endTime)) {
+                            reason = "Ngoài thời gian cho phép";
+                        } else if (!cccdNumber.equals(qrCccdNumberLast9)) {
+                            reason = "Số CCCD từ thẻ không khớp với QR";
+                        } else if (!cccdNumber.equals(regCccdNumberLast9)) {
+                            reason = "Số CCCD từ thẻ không khớp với đăng ký";
+                        }
+
+                        final String finalReason = reason;
+                        Log.e("NFC", "Thời gian bắt đầu: " + startTime.toString());
+                        Log.e("NFC", "Xác minh NFC thất bại: " + reason);
+                        runOnUiThread(() -> {
+                            statusTextView.setText(finalReason);
+                            Toast.makeText(MainActivity.this, finalReason, Toast.LENGTH_LONG).show();
+                        });
+                        publishToMqtt(qrCccdNumber, now, "denied");
                     }
-                    final String finalReason = reason;
+                } else {
+                    String reason = "Dữ liệu CCCD không hợp lệ";
                     Log.e("NFC", "Xác minh NFC thất bại: " + reason);
                     runOnUiThread(() -> {
-                        statusTextView.setText(finalReason);
-                        Toast.makeText(MainActivity.this, finalReason, Toast.LENGTH_LONG).show();
+                        statusTextView.setText(reason);
+                        Toast.makeText(MainActivity.this, reason, Toast.LENGTH_LONG).show();
                     });
-                    publishToMqtt(cccdNumber, now, "denied");
+                    publishToMqtt(qrCccdNumber != null ? qrCccdNumber : "unknown", now, "denied");
                 }
-
             } catch (IllegalArgumentException e) {
                 Log.e("NFC", "Lỗi MRZ không hợp lệ: " + e.getMessage(), e);
                 runOnUiThread(() -> {
@@ -598,7 +595,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void handleNfcIntent(Intent intent) {
-        // Giữ nguyên logic xử lý NFC intent
         Log.d("NFC_DEBUG", "Đang xử lý nfc intent: " + intent.getAction());
         String action = intent.getAction();
         if (NfcAdapter.ACTION_TECH_DISCOVERED.equals(action) ||
@@ -716,13 +712,10 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        // Ngắt kết nối MQTT khi activity bị hủy
         super.onDestroy();
-        if (mqttClient != null && mqttClient.isConnected()) {
-            try {
-                mqttClient.disconnect();
-            } catch (MqttException e) {
-                Log.e("MQTT", "Lỗi ngắt kết nối MQTT: " + e.getMessage());
-            }
+        if (mqttHandler != null) {
+            mqttHandler.disconnect();
         }
         cameraExecutor.shutdown();
     }
