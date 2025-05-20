@@ -29,6 +29,9 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    buildFeatures {
+        mlModelBinding = true
+    }
 }
 
 dependencies {
@@ -54,5 +57,12 @@ dependencies {
     implementation ("androidx.camera:camera-view:1.3.0")
     implementation ("net.sf.scuba:scuba-sc-android:0.0.18")
     implementation ("org.bouncycastle:bcpkix-jdk15on:1.65")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:common:18.11.0")
+    implementation("com.google.mlkit:face-detection:16.1.7")
+    implementation("org.tensorflow:tensorflow-lite:2.9.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.8.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.2")
 }
+
 
