@@ -95,10 +95,10 @@ import retrofit2.converter.gson.GsonConverterFactory;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String BROKER_URL = "tcp://192.168.0.132:1883";
+    private static final String BROKER_URL = "tcp://192.168.0.143:1883";
     private static final String CLIENT_ID = "AndroidQRandNFCClient_" + System.currentTimeMillis();
     private static final String TOPIC = "access/log";
-    private static final String BASE_URL = "https://192.168.0.132:7244/";
+    private static final String BASE_URL = "https://192.168.0.143:7244/";
     private static final long PROCESSING_DELAY = 1000;
     private static final int INPUT_SIZE = 112;
     private static final int OUTPUT_SIZE = 192;
@@ -112,6 +112,10 @@ public class MainActivity extends AppCompatActivity {
     private ExecutorService cameraExecutor;
     private Tag nfcTag;
     private String qrCccdNumber;
+
+    private String qrCccdNumber12digit;
+
+
     private String qrMrz;
     private Registration qrRegistration;
     private boolean isQrScanned;
@@ -316,9 +320,10 @@ public class MainActivity extends AppCompatActivity {
                                 stopCameraAnalysis();
                                 runOnUiThread(() -> {
                                     statusTextView.setText("Khuôn mặt khớp với thẻ CCCD");
-                                    Toast.makeText(this, "Khuôn mặt khớp, đang xác minh...", Toast.LENGTH_LONG).show();
+                                    Toast.makeText(this, "Khuôn mặt khớp với thẻ cccd, đang xác minh...", Toast.LENGTH_LONG).show();
                                 });
-                                verifyCccd(qrCccdNumber);
+                                Log.d("NFC", "CCCD number:"+  qrCccdNumber12digit);
+                                verifyCccd(qrCccdNumber12digit);
                             } else {
                                 runOnUiThread(() -> statusTextView.setText("Khuôn mặt không khớp với thẻ CCCD"));
                             }
@@ -334,32 +339,7 @@ public class MainActivity extends AppCompatActivity {
                 });
     }
 
-//    private float[] getFaceEmbedding(Bitmap bitmap) {
-//        ByteBuffer imageData = ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * 4);
-//        imageData.order(ByteOrder.nativeOrder());
-//        int[] intValues = new int[INPUT_SIZE * INPUT_SIZE];
-//        bitmap.getPixels(intValues, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
-//        imageData.rewind();
-//
-//        for (int i = 0; i < INPUT_SIZE; ++i) {
-//            for (int j = 0; j < INPUT_SIZE; ++j) {
-//                int pixelValue = intValues[i * INPUT_SIZE + j];
-//                imageData.putFloat((((pixelValue >> 16) & 0xFF) - IMAGE_MEAN) / IMAGE_STD);
-//                imageData.putFloat((((pixelValue >> 8) & 0xFF) - IMAGE_MEAN) / IMAGE_STD);
-//                imageData.putFloat(((pixelValue & 0xFF) - IMAGE_MEAN) / IMAGE_STD);
-//            }
-//        }
-//
-//        Object[] inputArray = {imageData};
-//        float[][] outputEmbedding = new float[1][OUTPUT_SIZE];
-//        try {
-//            tfliteInterpreter.run(inputArray, outputEmbedding);
-//            return outputEmbedding[0];
-//        } catch (Exception e) {
-//            Log.e("FaceRecognition", "Error running TFLite model: " + e.getMessage());
-//            return null;
-//        }
-//    }
+
     private float[] getFaceEmbedding(Bitmap bitmap) {
         ByteBuffer imageData = ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * 4);
 
@@ -393,15 +373,20 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private boolean compareFace(float[] emb1, float[] emb2) {
-        float distance = 0;
-        for (int i = 0; i < emb1.length; i++) {
-            float diff = emb1[i] - emb2[i];
-            distance += diff * diff;
-        }
-        distance = (float) Math.sqrt(distance);
-        return distance < 0.0008f;
+private boolean compareFace(float[] emb1,float[] emb2) {
+    float distance = 0;
+    for (int i=0;i<emb1.length;i++) {
+        float diff = emb1[i] - emb2[i];
+        distance = diff*diff;
     }
+
+    distance = (float) Math.sqrt(distance);
+    if (distance < 0.0008f) {
+        return true;
+    } else {
+        return false;
+    }
+}
 
     private void loadModel() {
         try {
@@ -422,126 +407,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-//    private void readNfcWithMrz(Tag tag, String mrz) {
-//        ExecutorService nfcExecutor = Executors.newSingleThreadExecutor();
-//        nfcExecutor.execute(() -> {
-//            PassportService passportService = null;
-//            IsoDep isoDep = null;
-//            try {
-//                Log.d("NFC", "Bắt đầu đọc NFC cho CCCD, MRZ: " + mrz);
-//                isoDep = IsoDep.get(tag);
-//                if (isoDep == null) {
-//                    throw new IOException("Thẻ không hỗ trợ IsoDep");
-//                }
-//                isoDep.connect();
-//                isoDep.setTimeout(10000);
-//
-//                CardService cardService = CardService.getInstance(isoDep);
-//                passportService = new PassportService(
-//                        cardService,
-//                        PassportService.EXTENDED_MAX_TRANCEIVE_LENGTH,
-//                        PassportService.DEFAULT_MAX_BLOCKSIZE,
-//                        false,
-//                        false
-//                );
-//                passportService.open();
-//
-//                if (mrz == null || mrz.length() < 90) {
-//                    throw new IllegalArgumentException("MRZ không hợp lệ");
-//                }
-//
-////                String documentNumber = mrz.substring(5, 14).replace("<", "");
-////                String dob = formatDate(mrz.substring(15, 21));
-////                String expiry = formatDate(mrz.substring(23, 29));
-//                String documentNumberRaw = mrz.substring(18, 27);
-//                String documentNumber = documentNumberRaw.replace("<", "");
-//                String dob = mrz.substring(31, 37);
-//                String expiry = mrz.substring(39, 45);
-//                Log.d("NFC", "Tạo BACKey: docNumber=" + documentNumber + ", dob=" + dob + ", expiry=" + expiry);
-//
-//                BACKey bacKey = new BACKey(documentNumber, dob, expiry);
-//                boolean paceSucceeded = false;
-//                try {
-//                    CardAccessFile cardAccessFile = new CardAccessFile(passportService.getInputStream(PassportService.EF_CARD_ACCESS));
-//                    Collection<SecurityInfo> securityInfos = cardAccessFile.getSecurityInfos();
-//                    for (SecurityInfo securityInfo : securityInfos) {
-//                        if (securityInfo instanceof PACEInfo) {
-//                            passportService.doPACE(
-//                                    bacKey,
-//                                    securityInfo.getObjectIdentifier(),
-//                                    PACEInfo.toParameterSpec(((PACEInfo) securityInfo).getParameterId()),
-//                                    null
-//                            );
-//                            paceSucceeded = true;
-//                            break;
-//                        }
-//                    }
-//                } catch (Exception e) {
-//                    Log.w("NFC", "PACE thất bại: " + e.getMessage());
-//                }
-//
-//                passportService.sendSelectApplet(paceSucceeded);
-//                if (!paceSucceeded) {
-//                    try {
-//                        passportService.getInputStream(PassportService.EF_COM).read();
-//                    } catch (Exception e) {
-//                        passportService.sendSelectApplet(false);
-//                        passportService.doBAC(bacKey);
-//                    }
-//                }
-//
-//                // Read DG2 for face image
-//                InputStream inputStream = passportService.getInputStream(PassportService.EF_DG2);
-//                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-//                byte[] buffer = new byte[1024];
-//                int bytesRead;
-//                while ((bytesRead = inputStream.read(buffer)) != -1) {
-//                    baos.write(buffer, 0, bytesRead);
-//                }
-//                inputStream.close();
-//                byte[] data = baos.toByteArray();
-//
-//                ByteArrayInputStream bais = new ByteArrayInputStream(data);
-//                DG2File dg2File = new DG2File(bais);
-//                bais.close();
-//
-//                // Extract image (simplified, actual implementation may vary)
-//                byte[] imageData = dg2File.getEncoded(); // Adjust based on actual DG2 structure
-//                nfcImageBitmap = BitmapFactory.decodeByteArray(imageData, 0, imageData.length);
-//                if (nfcImageBitmap != null) {
-//                    analyzeNfcFace();
-//                    isNfcRead = true;
-//                    runOnUiThread(() -> {
-//                        statusTextView.setText("Đọc NFC thành công\nVui lòng đưa khuôn mặt vào camera");
-//                        Toast.makeText(this, "Đọc NFC thành công, đưa khuôn mặt vào camera", Toast.LENGTH_LONG).show();
-//                    });
-//                    startCameraForFaceRecognition();
-//                } else {
-//                    throw new IOException("Không thể giải mã hình ảnh từ DG2");
-//                }
-//
-//            } catch (Exception e) {
-//                Log.e("NFC", "Lỗi đọc NFC: " + e.getMessage(), e);
-//                runOnUiThread(() -> {
-//                    statusTextView.setText("Lỗi đọc NFC: " + e.getMessage());
-//                    Toast.makeText(this, "Lỗi đọc NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
-//                });
-//                publishToMqtt(qrCccdNumber, LocalDateTime.now(), "denied");
-//            } finally {
-//                try {
-//                    if (passportService != null) {
-//                        passportService.close();
-//                    }
-//                    if (isoDep != null && isoDep.isConnected()) {
-//                        isoDep.close();
-//                    }
-//                } catch (Exception e) {
-//                    Log.e("NFC", "Lỗi khi đóng kết nối: " + e.getMessage());
-//                }
-//                nfcExecutor.shutdown();
-//            }
-//        });
-//    }
+
 private void readNfcWithMrz(Tag tag, String mrz) {
     ExecutorService nfcExecutor = Executors.newSingleThreadExecutor();
     nfcExecutor.execute(() -> {
@@ -572,10 +438,13 @@ private void readNfcWithMrz(Tag tag, String mrz) {
             }
 
             // Extract fields for BACKey
+            String documentNumberRaw12Digit = mrz.substring(15,27);
+            String documentNumber12Digit = documentNumberRaw12Digit.replace("<", "");
             String documentNumberRaw = mrz.substring(18,27);
             String documentNumber = documentNumberRaw.replace("<", "");
             String dob = mrz.substring(31, 37);
             String expiry = mrz.substring(39, 45);
+            qrCccdNumber12digit = documentNumber12Digit;
 
             Log.d("NFC", "Tạo BACKey: docNumber=" + documentNumber + ", dob=" + dob + ", expiry=" + expiry);
 
@@ -665,7 +534,7 @@ private void readNfcWithMrz(Tag tag, String mrz) {
                 statusTextView.setText("Lỗi đọc NFC: " + e.getMessage());
                 Toast.makeText(this, "Lỗi đọc NFC: " + e.getMessage(), Toast.LENGTH_LONG).show();
             });
-            publishToMqtt(qrCccdNumber, LocalDateTime.now(), "denied");
+            publishToMqtt(qrCccdNumber12digit, LocalDateTime.now(), "denied");
         } finally {
             try {
                 if (dg2InputStream != null) {
@@ -684,75 +553,7 @@ private void readNfcWithMrz(Tag tag, String mrz) {
         }
     });
 }
-//    private void analyzeNfcFace() {
-//        InputImage inputImage = InputImage.fromBitmap(nfcImageBitmap, 0);
-//        faceDetector.process(inputImage)
-//                .addOnSuccessListener(faces -> {
-//                    if (faces.size() > 0) {
-//                        Face face = faces.get(0);
-//                        Rect boundingBox = face.getBoundingBox();
-//                        RectF adjustedBoundingBox = new RectF(
-//                                boundingBox.left,
-//                                boundingBox.top,
-//                                boundingBox.right,
-//                                boundingBox.bottom
-//                        );
-//                        Bitmap croppedFace = ImageUtils.getCropBitmapByCPU(nfcImageBitmap, adjustedBoundingBox);
-//                        Bitmap resizedFace = ImageUtils.resizedBitmap(croppedFace);
-//                        nfcFaceEmbedding = getFaceEmbedding(resizedFace);
-//                        if (nfcFaceEmbedding == null) {
-//                            runOnUiThread(() -> statusTextView.setText("Không thể trích xuất đặc trưng khuôn mặt từ NFC"));
-//                        }
-//                    } else {
-//                        runOnUiThread(() -> statusTextView.setText("Không tìm thấy khuôn mặt trong ảnh NFC"));
-//                    }
-//                })
-//                .addOnFailureListener(e -> {
-//                    runOnUiThread(() -> statusTextView.setText("Lỗi trích xuất khuôn mặt từ NFC: " + e.getMessage()));
-//                });
-//    }
-//private void analyzeNfcFace() {
-//    InputImage inputImage = InputImage.fromBitmap(nfcImageBitmap, 0);
-//    FaceDetector faceDetector = FaceDetection.getClient();
-//
-//    faceDetector.process(inputImage)
-//            .addOnSuccessListener(new OnSuccessListener<List<Face>>() {
-//                @Override
-//                public void onSuccess(List<Face> faces) {
-//                    Rect boundingBox = null;
-//                    if (faces.size() > 0) {
-//                        Face face = faces.get(0);
-//                        boundingBox = face.getBoundingBox();
-//
-//                        float padding = 0.0f;
-//                        RectF adjustedBoundingBox = new RectF(
-//                                boundingBox.left - padding,
-//                                boundingBox.top - padding,
-//                                boundingBox.right + padding,
-//                                boundingBox.bottom + padding
-//                        );
-//
-//                        Bitmap croppedFace = ImageUtils.getCropBitmapByCPU(nfcImageBitmap, adjustedBoundingBox);
-//                        Bitmap resizedFace = ImageUtils.resizedBitmap(croppedFace);
-//                        nfcFaceEmbedding = getFaceEmbedding(resizedFace);
-//
-//                        if (nfcFaceEmbedding == null) {
-//                            runOnUiThread(() -> statusTextView.setText("Không thể trích xuất đặc trưng khuôn mặt từ NFC"));
-//                        }
-//                    } else {
-//                        runOnUiThread(() -> statusTextView.setText("Không tìm được khuôn mặt trong ảnh NFC"));
-//                    }
-//                }
-//            })
-//            .addOnFailureListener(e -> Log.e("NFC", "Face detection failure", e));
-//}
-//
-//    private String formatDate(String date) {
-//        if (date == null || date.length() != 6) {
-//            return date;
-//        }
-//        return date.substring(4, 6) + date.substring(2, 4) + date.substring(0, 2);
-//    }
+
 private void analyzeNfcFace() {
     Log.d("NFC", "Bắt đầu phân tích khuôn mặt NFC");
     if (nfcImageBitmap == null) {
@@ -918,10 +719,14 @@ private void analyzeNfcFace() {
                             }
                         } else {
                             StringBuilder errorBuilder = new StringBuilder("Bạn chưa đăng ký\nServer trả về: ");
+
                             errorBuilder.append(regResponse.getErrDesc() != null ? regResponse.getErrDesc() : "Không có dữ liệu");
                             final String errorMessage = errorBuilder.toString();
+
                             runOnUiThread(() -> statusTextView.setText(errorMessage));
                             publishToMqtt(cccdNumber, LocalDateTime.now(), "denied");
+                            Log.d("NDC", "Bạn chưa đăng ký, server trả về: "+ errorMessage);
+
                         }
                     } else {
                         StringBuilder errorBuilder = new StringBuilder("Lỗi server: Bạn chưa đăng ký");
@@ -973,6 +778,7 @@ private void analyzeNfcFace() {
 
     private void resetState() {
         qrCccdNumber = null;
+        qrCccdNumber12digit = null;
         qrMrz = null;
         qrRegistration = null;
         isQrScanned = false;
