@@ -38,7 +38,8 @@
                 android:name="android.nfc.action.TECH_DISCOVERED"
                 android:resource="@xml/nfc_tech_filter" />
         </activity>
-
+        <activity android:name=".ScanQrActivity" />
+        <activity android:name=".HistoryActivity" />
         <!-- Declare Paho MQTT Service -->
         <service android:name="org.eclipse.paho.android.service.MqttService" />
     </application>

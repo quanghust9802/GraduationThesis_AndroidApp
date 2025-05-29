@@ -1,9 +1,7 @@
 package com.example.myapplication;
 
-import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
-import android.widget.Button;
 import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
@@ -22,32 +20,25 @@ import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.converter.gson.GsonConverterFactory;
 
-public class MainActivity extends AppCompatActivity {
+public class HistoryActivity extends AppCompatActivity {
 
     private static final String BASE_URL = "https://192.168.1.139:7244/";
     private RecyclerView recyclerView;
     private HistoryAdapter historyAdapter;
     private List<AccessLog> accessLogs;
-    private ApiService apiService;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
+        setContentView(R.layout.activity_history);
 
-        // Thiết lập Toolbar
+//        // Thiết lập Toolbar
 //        Toolbar toolbar = findViewById(R.id.toolbar);
 //        setSupportActionBar(toolbar);
 //        if (getSupportActionBar() != null) {
-//            getSupportActionBar().setTitle("Trang chủ");
+//            getSupportActionBar().setTitle("Lịch sử ra vào");
+//            getSupportActionBar().setDisplayHomeAsUpEnabled(true);
 //        }
-
-        // Xử lý nút Quét mã
-        Button scanQrButton = findViewById(R.id.scanQrButton);
-        scanQrButton.setOnClickListener(v -> {
-            Intent intent = new Intent(MainActivity.this, ScanQrActivity.class);
-            startActivity(intent);
-        });
 
         // Thiết lập RecyclerView
         recyclerView = findViewById(R.id.historyRecyclerView);
@@ -56,20 +47,20 @@ public class MainActivity extends AppCompatActivity {
         historyAdapter = new HistoryAdapter(accessLogs);
         recyclerView.setAdapter(historyAdapter);
 
-        // Khởi tạo Retrofit
+        fetchAccessHistory();
+    }
+
+    private void fetchAccessHistory() {
         OkHttpClient client = getUnsafeOkHttpClient();
         Retrofit retrofit = new Retrofit.Builder()
                 .baseUrl(BASE_URL)
                 .client(client)
                 .addConverterFactory(GsonConverterFactory.create())
                 .build();
-        apiService = retrofit.create(ApiService.class);
 
-        fetchAccessHistory();
-    }
-
-    private void fetchAccessHistory() {
+        ApiService apiService = retrofit.create(ApiService.class);
         Call<AccessLogResponse> call = apiService.getAccessHistory();
+
         call.enqueue(new Callback<AccessLogResponse>() {
             @Override
             public void onResponse(Call<AccessLogResponse> call, Response<AccessLogResponse> response) {
@@ -82,8 +73,8 @@ public class MainActivity extends AppCompatActivity {
                     } else {
                         String errorMsg = "Không thể tải lịch sử: " +
                                 (logResponse.getErrDesc() != null ? logResponse.getErrDesc() : "Không có dữ liệu");
-                        Toast.makeText(MainActivity.this, errorMsg, Toast.LENGTH_LONG).show();
-                        Log.e("MainActivity", errorMsg);
+                        Toast.makeText(HistoryActivity.this, errorMsg, Toast.LENGTH_LONG).show();
+                        Log.e("HistoryActivity", errorMsg);
                     }
                 } else {
                     String errorMsg = "Không thể tải lịch sử: ";
@@ -96,15 +87,15 @@ public class MainActivity extends AppCompatActivity {
                     } else {
                         errorMsg += response.message();
                     }
-                    Toast.makeText(MainActivity.this, errorMsg, Toast.LENGTH_LONG).show();
-                    Log.e("MainActivity", errorMsg);
+                    Toast.makeText(HistoryActivity.this, errorMsg, Toast.LENGTH_LONG).show();
+                    Log.e("HistoryActivity", errorMsg);
                 }
             }
 
             @Override
             public void onFailure(Call<AccessLogResponse> call, Throwable t) {
-                Toast.makeText(MainActivity.this, "Lỗi kết nối: " + t.getMessage(), Toast.LENGTH_LONG).show();
-                Log.e("MainActivity", "Lỗi: " + t.getMessage());
+                Toast.makeText(HistoryActivity.this, "Lỗi kết nối: " + t.getMessage(), Toast.LENGTH_LONG).show();
+                Log.e("HistoryActivity", "Lỗi: " + t.getMessage());
             }
         });
     }
@@ -140,5 +131,11 @@ public class MainActivity extends AppCompatActivity {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @Override
+    public boolean onSupportNavigateUp() {
+        finish();
+        return true;
     }
 }
