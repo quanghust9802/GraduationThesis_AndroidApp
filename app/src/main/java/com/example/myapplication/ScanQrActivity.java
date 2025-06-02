@@ -698,6 +698,7 @@ public class ScanQrActivity extends AppCompatActivity {
                                 final String reason = qrRegistration.getStatus() != 1 ? "Chưa được duyệt" : "Ngoài thời gian cho phép";
                                 runOnUiThread(() -> statusTextView.setText("Xác minh thất bại: " + reason));
                                 publishToMqtt(cccdNumber, now, "denied");
+                                rejectOpenDoor();
                             }
                         } else {
                             StringBuilder errorBuilder = new StringBuilder("Bạn chưa đăng ký\nServer trả về: ");
@@ -772,6 +773,10 @@ public class ScanQrActivity extends AppCompatActivity {
 
     private void openDoor() {
         runOnUiThread(() -> Toast.makeText(this, "Cửa mở", Toast.LENGTH_SHORT).show());
+    }
+
+    private void rejectOpenDoor() {
+        runOnUiThread(() -> Toast.makeText(this, "Từ chối mở cửa", Toast.LENGTH_SHORT).show());
     }
 
     @Override
